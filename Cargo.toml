@@ -1,0 +1,29 @@
+[package]
+name = "jabr"
+description = "JavaAccessBridge wrapper for Rust"
+keywords = ["accessibility", "java", "windows"]
+authors = [
+    "mzdk100 <mzdk100@foxmail.com>",
+    "lwboy <liwenboy2008@126.com>",
+    "igaisin <rayssunrise@gmail.com>"
+]
+version = "0.1.7"
+edition = "2024"
+readme = "README.md"
+repository = "https://github.com/igaisin/jabr"
+license = "Apache-2.0"
+
+# [package.metadata.docs.rs]
+# all-features = true
+# rustc-args = ["--cfg", "docsrs"]
+# rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
+#default-target = "x86_64-pc-windows-msvc"
+
+[dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_WindowsAndMessaging", "Win32_System_LibraryLoader"] }
+windows-core = { version = "0.62.2" }
+
+[lib]
+name = "jabr"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
