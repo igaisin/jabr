@@ -13,10 +13,10 @@
  */
 
 use std::ffi::{CStr, c_char};
-use windows::Win32::Foundation::{HMODULE, HWND};
+use windows::Win32::Foundation::{HMODULE, HWND, LPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, FindWindowW, GetMessageW, MSG, PEEK_MESSAGE_REMOVE_TYPE, PM_REMOVE,
-    PeekMessageW, TranslateMessage, WM_QUIT,
+    DispatchMessageW, EnumWindows, FindWindowW, GetClassNameW, GetMessageW, GetWindowTextW, MSG,
+    PEEK_MESSAGE_REMOVE_TYPE, PM_REMOVE, PeekMessageW, TranslateMessage, WM_QUIT, WNDENUMPROC,
 };
 use windows_core::{HSTRING, PCWSTR};
 
@@ -25,7 +25,7 @@ pub(crate) struct SafeModuleHandle(HMODULE);
 
 impl SafeModuleHandle {
     /**
-    创建新实例。
+    Создайте новый экземпляр
     */
     pub(crate) fn new(h_module: HMODULE) -> Self {
         Self(h_module)
@@ -234,5 +234,76 @@ pub fn find_window(class_name: Option<&str>, window_name: Option<&str>) -> HWND 
             _ => FindWindowW(None, None),
         }
         .unwrap_or(Default::default())
+    }
+}
+
+/**
+Структура, представляющая информацию о найденном Java-окне.
+Содержит дескриптор окна (`hwnd`) и его заголовок (`title`).
+*/
+#[derive(Debug, Clone)]
+pub struct JavaWindow {
+    pub hwnd: HWND,
+    pub title: String,
+}
+
+// Поток-безопасный вектор для временного сбора окон внутри системного коллбэка
+static mut FOUND_JAVA_WINDOWS: Vec<JavaWindow> = Vec::new();
+
+/// Системный коллбэк Windows для перечисления окон
+unsafe fn enum_java_windows_callback(hwnd: HWND, _lparam: LPARAM) -> i32 {
+    unsafe {
+        // Пропускаем невидимые окна
+        // if IsWindowVisible(hwnd).as_bool() == false {
+        //     return 1;
+        // }
+
+        // Проверяем класс окна (ищем SunAwtFrame и SunAwtDialog)
+        let mut class_buffer = [0u16; 256];
+        let class_len = GetClassNameW(hwnd, &mut class_buffer);
+        if class_len == 0 {
+            return 1;
+        }
+        let class_name = String::from_utf16_lossy(&class_buffer[..class_len as usize]);
+
+        if class_name == "SunAwtFrame" || class_name == "SunAwtDialog" {
+            // заголовок окна
+            let mut text_buffer = [0u16; 512];
+            let text_len = GetWindowTextW(hwnd, &mut text_buffer);
+            let title = if text_len > 0 {
+                String::from_utf16_lossy(&text_buffer[..text_len as usize])
+            } else {
+                format!("Без названия ([{}])", class_name)
+            };
+
+            let vec_ptr = std::ptr::addr_of_mut!(FOUND_JAVA_WINDOWS);
+            (*vec_ptr).push(JavaWindow { hwnd, title });
+        }
+
+        1 // Продолжаем перечисление следующих окон
+    }
+}
+
+/**
+Перечисляет все видимые окна верхнего уровня в системе и возвращает список окон,
+имена классов которых соответствуют графической подсистеме Java AWT/Swing (`SunAwtFrame` или `SunAwtDialog`).
+Возвращает вектор структур `JavaWindowInfo`, содержащих HWND и заголовки окон.
+*/
+pub fn find_java_windows() -> Vec<JavaWindow> {
+    unsafe {
+        let vec_ptr = std::ptr::addr_of_mut!(FOUND_JAVA_WINDOWS);
+
+        // Очищаем вектор перед новым сканированием через разыменование указателя
+        (*vec_ptr).clear();
+
+        // Превращаем нашу функцию в точный тип WNDENUMPROC
+        let callback_proc: WNDENUMPROC =
+            std::mem::transmute(enum_java_windows_callback as *const ());
+
+        // Запускаем перечисление окон через Win32 API.
+        let _ = EnumWindows(callback_proc, LPARAM(0));
+
+        // Клонируем и возвращаем собранный результат через разыменование указателя
+        (*vec_ptr).clone()
     }
 }
