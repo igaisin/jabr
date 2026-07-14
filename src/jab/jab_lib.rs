@@ -41,10 +41,12 @@ use crate::jab::jab_lib::{
     },
 };
 use crate::utils::SafeModuleHandle;
+use std::ffi::CString;
+use std::os::windows::ffi::OsStrExt;
 use std::{
-    env::var,
-    ffi::CString,
+    env, fs,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 // use win_wrap::common::{FARPROC, HWND, Result, free_library, get_proc_address, load_library};
 use windows::{
@@ -52,6 +54,79 @@ use windows::{
     Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW},
     core::{Error as WinError, HSTRING, PCSTR},
 };
+
+static CUSTOM_SEARCH_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+static LIBRARY_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+
+#[cfg(all(target_arch = "x86"))]
+const JAB_LIB_NAME: &str = "WindowsAccessBridge-32.dll";
+#[cfg(all(target_arch = "x86_64"))]
+const JAB_LIB_NAME: &str = "WindowsAccessBridge-64.dll";
+
+/// Установить пользовательскую директорию для поиска
+pub fn set_custom_directory(directory: PathBuf) {
+    if CUSTOM_SEARCH_DIRECTORY.set(directory).is_err() {
+        eprintln!("Директория поиска уже задана, и изменить её нельзя");
+    }
+}
+
+/// Найти путь к библиотеке
+pub(crate) fn find_library_path() -> Option<PathBuf> {
+    // 1. Проверяем пользовательскую директорию (приоритет №1)
+    if let Some(custom_dir) = CUSTOM_SEARCH_DIRECTORY.get() {
+        let path = custom_dir.join(JAB_LIB_NAME);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    // 2. Проверяем переменную окружения JAVA_HOME
+    if let Ok(java_home) = env::var("JAVA_HOME") {
+        let path = Path::new(&java_home).join("bin").join(JAB_LIB_NAME);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    // 3. Фоллбэк: ищем в C:\Program Files\Java любую папку, начинающуюся с jre или jdk
+    // Это корректная замена неработающему wildcard "jre1.8.0_*"
+    let default_java_dir = PathBuf::from("C:\\Program Files\\Java");
+    if default_java_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&default_java_dir) {
+            for entry in entries.flatten() {
+                let file_name = entry.file_name();
+                let name = file_name.to_string_lossy();
+                if name.starts_with("jre") || name.starts_with("jdk") {
+                    let path = entry.path().join("bin").join(JAB_LIB_NAME);
+                    if path.exists() {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Установить динамическую библиотеку для программы
+pub fn is_setup_library() -> Result<(), String> {
+    if let Some(path) = find_library_path() {
+        LIBRARY_DIRECTORY
+            .set(path.parent().unwrap().to_path_buf())
+            .map_err(|_| "Не удалось установить путь к библиотеке".to_string())?;
+        println!(
+            "Библиотека установлена: {}",
+            LIBRARY_DIRECTORY.get().unwrap().display()
+        );
+        Ok(())
+    } else {
+        Err(format!(
+            "Не удалось найти библиотеку `{}` в указанной директории",
+            JAB_LIB_NAME
+        ))
+    }
+}
 
 macro_rules! call_proc {
     ($module:expr,$name:ident,$def:ty,$($arg:expr),*) => {{
@@ -1132,35 +1207,30 @@ pub(crate) struct JabLib {
 impl JabLib {
     //noinspection RsUnresolvedPath
     //noinspection SpellCheckingInspection
-    pub(crate) fn new(path: Option<PathBuf>) -> windows::core::Result<Self> {
-        #[cfg(target_arch = "x86_64")]
-        const DLL_NAME: &str = "windowsaccessbridge-64.dll";
-        #[cfg(target_arch = "x86")]
-        const DLL_NAME: &str = "windowsaccessbridge-32.dll";
-        let lib = match path {
-            None => match var("JAVA_HOME") {
-                Ok(s) => Path::new(&s).join("bin").join(DLL_NAME),
-                Err(e) => {
-                    return Err(WinError::new(
-                        S_FALSE,
-                        &format!("Не удается найти библиотеку jab. ({})", e),
-                    ));
-                }
-            },
-            Some(p) => p.to_path_buf(),
-        };
-        let h_module = match unsafe { LoadLibraryW(&HSTRING::from(lib.to_str().unwrap())) } {
-            Ok(h) => SafeModuleHandle::new(h),
-            Err(e) => return Err(e),
-        };
-        let res = jab!(*h_module, windows_run);
+    pub(crate) fn new(lib_path: PathBuf) -> windows::core::Result<Self> {
+        // Безопасное преобразование в UTF-16 для Windows API
+        let wide_path: Vec<u16> = lib_path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let h_module = unsafe { LoadLibraryW(windows::core::PCWSTR(wide_path.as_ptr())) }
+            .map_err(|e| WinError::new(S_FALSE, &format!("Ошибка LoadLibraryW: {}", e)))?;
+
+        let safe_handle = SafeModuleHandle::new(h_module);
+
+        let res = jab!(*safe_handle, windows_run);
         if res.is_none() {
             return Err(WinError::new(
                 S_FALSE,
-                "Не удается загрузить библиотеку jab.",
+                "Не удается инициализировать JAB (windows_run не найден).",
             ));
         }
-        Ok(Self { h_module })
+
+        Ok(Self {
+            h_module: safe_handle,
+        })
     }
 
     /**

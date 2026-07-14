@@ -13,7 +13,6 @@
  */
 
 #![allow(non_upper_case_globals)]
-
 pub(crate) mod jab_lib;
 
 pub mod callback;
@@ -27,12 +26,13 @@ pub mod table;
 pub mod text;
 pub mod version;
 
+pub use jab_lib::{is_setup_library, set_custom_directory};
+
 use crate::{
-    find_library_path,
     jab::{
         callback::{AccessibleCallback, AccessibleContextType},
         context::AccessibleContext,
-        jab_lib::{JabLib, packages::JObject64},
+        jab_lib::{JabLib, find_library_path, packages::JObject64},
     },
     utils::{StringExt, pump_waiting_messages},
 };
@@ -40,13 +40,13 @@ use std::sync::{Arc, LazyLock, Mutex};
 use windows::Win32::Foundation::HWND;
 
 static LIB: LazyLock<JabLib> = LazyLock::new(|| {
-    #[cfg(target_arch = "x86_64")]
-    let path = find_library_path("WindowsAccessBridge-64.dll").unwrap_or_default();
-    #[cfg(target_arch = "x86")]
-    let path = find_library_path("WindowsAccessBridge-32.dll").unwrap_or_default();
+    let path = find_library_path().unwrap_or_else(|| {
+        panic!("Критическая ошибка: Не удалось найти библиотеку Java Access Bridge.")
+    });
 
     pump_waiting_messages();
-    JabLib::new(Some(path)).unwrap()
+
+    JabLib::new(path).expect("Не удалось загрузить DLL в память")
 });
 
 static FUNCS: Mutex<Vec<AccessibleCallback>> = Mutex::new(vec![]);

@@ -15,12 +15,12 @@
 use crate::jab::{
     hypertext::AccessibleHypertext,
     jab_lib::{
+        JabLib,
         packages::{
             AccessibleActionInfo, AccessibleActions, AccessibleActionsToDo,
             AccessibleContext as AC, AccessibleContextInfo, JInt, MAX_ACTION_INFO, MAX_STRING_SIZE,
             SHORT_STRING_SIZE,
         },
-        JabLib,
     },
     key_binding::AccessibleKeyBinding,
     relation::AccessibleRelation,
@@ -29,13 +29,13 @@ use crate::jab::{
     text::AccessibleTextAttributes,
     version::AccessBridgeVersionInfo,
 };
+use crate::utils::StringExt;
 use std::{
     cmp::min,
-    ffi::{c_char, CStr},
+    ffi::{CStr, c_char},
     fmt::{Debug, Formatter},
 };
 use windows::Win32::Foundation::HWND;
-use crate::utils::StringExt;
 
 pub struct AccessibleContext<'lib> {
     _lib: &'lib JabLib,

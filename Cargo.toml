@@ -7,7 +7,7 @@ authors = [
     "lwboy <liwenboy2008@126.com>",
     "igaisin <rayssunrise@gmail.com>"
 ]
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 readme = "README.md"
 repository = "https://github.com/igaisin/jabr"
